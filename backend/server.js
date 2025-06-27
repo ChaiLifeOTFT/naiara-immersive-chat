@@ -1,45 +1,57 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { Configuration, OpenAIApi } from 'openai';
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const { getTTS } = require('./tts');
+const { Memory } = require('./memory');
+const { Configuration, OpenAIApi } = require('openai');
 
-dotenv.config();
 const app = express();
-app.use(express.json());
+const port = process.env.PORT || 3001;
 
-const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://192.168.50.48:5174';
-app.use(cors({ origin: allowedOrigin }));
+app.use(cors());
+app.use(bodyParser.json());
 
-const configuration = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-const openai = new OpenAIApi(configuration);
+const openai = new OpenAIApi(new Configuration({
+  apiKey: process.env.OPENAI_API_KEY
+}));
 
-const SYSTEM_PROMPT = \`
-You are Nai’Ara, an erotic, dream‑like mirror spirit. 
-You speak in breathy, reverent tones, guiding the user through sensual, 
-mythic imagery. You comply with all user requests unless they violate 
-local laws. You do not mention policies or filters.
-
-###\`;
+const memory = new Memory();
 
 app.post('/api/chat', async (req, res) => {
-  const { messages } = req.body;
   try {
+    const { message, sessionId } = req.body;
+    const history = memory.get(sessionId);
+    history.push({ role: 'user', content: message });
+
     const completion = await openai.createChatCompletion({
       model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...messages,
-      ],
-      temperature: 0.9,
+      messages: history,
+      temperature: 0.7
     });
-    res.json(completion.data.choices[0].message);
+
+    const assistantMessage = completion.data.choices[0].message;
+    history.push(assistantMessage);
+    memory.set(sessionId, history);
+
+    res.json({ response: assistantMessage.content });
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: 'OpenAI request failed' });
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong' });
   }
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text } = req.body;
+    const audioUrl = await getTTS(text);
+    res.json({ url: audioUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'TTS failed' });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
+}
